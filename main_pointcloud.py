@@ -13,9 +13,9 @@ from modules import ISAB, PMA, SAB
 class SetTransformer(nn.Module):
     def __init__(
         self,
-        dim_input=3,
+        dim_input=100,
         num_outputs=1,
-        dim_output=40,
+        dim_output=2,
         num_inds=32,
         dim_hidden=128,
         num_heads=4,

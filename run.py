@@ -37,10 +37,11 @@ N_min = args.N_min
 N_max = args.N_max
 K = args.K
 
+# Input size
 D = 2
 mvn = MultivariateNormalDiag(D)
 mog = MixtureOfMVNs(mvn)
-dim_output = 2*D
+dim_output = 2 * D
 
 if args.net == 'set_transformer':
     net = SetTransformer(D, K, dim_output).cuda()
@@ -49,6 +50,7 @@ elif args.net == 'deepset':
 else:
     raise ValueError('Invalid net {}'.format(args.net))
 benchfile = os.path.join('benchmark', 'mog_{:d}.pkl'.format(K))
+
 
 def generate_benchmark():
     if not os.path.isdir('benchmark'):
@@ -60,10 +62,13 @@ def generate_benchmark():
         X, labels, pi, params = mog.sample(B, N, K, return_gt=True)
         ll += mog.log_prob(X, pi, params).item()
         data.append(X)
-    bench = [data, ll/args.num_bench]
+    bench = [data, ll / args.num_bench]
     torch.save(bench, benchfile)
 
+
 save_dir = os.path.join('results', args.net, args.run_name)
+
+
 def train():
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
@@ -76,14 +81,14 @@ def train():
     logger = logging.getLogger(args.run_name)
     logger.addHandler(logging.FileHandler(
         os.path.join(save_dir,
-            'train_'+time.strftime('%Y%m%d-%H%M')+'.log'),
+                     'train_' + time.strftime('%Y%m%d-%H%M') + '.log'),
         mode='w'))
     logger.info(str(args) + '\n')
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
     tick = time.time()
-    for t in range(1, args.num_steps+1):
-        if t == int(0.5*args.num_steps):
+    for t in range(1, args.num_steps + 1):
+        if t == int(0.5 * args.num_steps):
             optimizer.param_groups[0]['lr'] *= 0.1
         net.train()
         optimizer.zero_grad()
@@ -96,18 +101,19 @@ def train():
 
         if t % args.test_freq == 0:
             line = 'step {}, lr {:.3e}, '.format(
-                    t, optimizer.param_groups[0]['lr'])
+                t, optimizer.param_groups[0]['lr'])
             line += test(bench, verbose=False)
-            line += ' ({:.3f} secs)'.format(time.time()-tick)
+            line += ' ({:.3f} secs)'.format(time.time() - tick)
             tick = time.time()
             logger.info(line)
 
         if t % args.save_freq == 0:
-            torch.save({'state_dict':net.state_dict()},
-                    os.path.join(save_dir, 'model.tar'))
+            torch.save({'state_dict': net.state_dict()},
+                       os.path.join(save_dir, 'model.tar'))
 
-    torch.save({'state_dict':net.state_dict()},
-        os.path.join(save_dir, 'model.tar'))
+    torch.save({'state_dict': net.state_dict()},
+               os.path.join(save_dir, 'model.tar'))
+
 
 def test(bench, verbose=True):
     net.eval()
@@ -126,14 +132,16 @@ def test(bench, verbose=True):
         logger.info(line)
     return line
 
+
 def plot():
     net.eval()
     X = mog.sample(B, np.random.randint(N_min, N_max), K)
     pi, params = mvn.parse(net(X))
     ll, labels = mog.log_prob(X, pi, params, return_labels=True)
-    fig, axes = plt.subplots(2, B//2, figsize=(7*B//5,5))
+    fig, axes = plt.subplots(2, B // 2, figsize=(7 * B // 5, 5))
     mog.plot(X, labels, params, axes)
     plt.show()
+
 
 if __name__ == '__main__':
     if args.mode == 'bench':

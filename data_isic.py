@@ -1,5 +1,6 @@
 import numpy as np
 import h5py
+import pandas as pd
 
 
 def rotate_z(theta, x):
@@ -35,17 +36,17 @@ def standardize(x):
 
 
 class ModelFetcher(object):
-    def __init__(self, fname, batch_size, down_sample=10, do_standardize=True, do_augmentation=False):
+    def __init__(self, train_name, val_name, batch_size, down_sample=10, do_standardize=True, do_augmentation=False):
 
-        self.fname = fname
+        self.train_name = train_name
+        self.val_name = val_name
         self.batch_size = batch_size
         self.down_sample = down_sample
 
-        with h5py.File(fname, 'r') as f:
-            self._train_data = np.array(f['tr_cloud'])
-            self._train_label = np.array(f['tr_labels'])
-            self._test_data = np.array(f['test_cloud'])
-            self._test_label = np.array(f['test_labels'])
+        self._train_data = pd.read_csv(train_name).filter(like="feature", axis=1)
+        self._train_label = pd.read_csv(train_name)["target"]
+        self._test_data = pd.read_csv(val_name).filter(like="feature", axis=1)
+        self._test_label = pd.read_csv(val_name)["target"]
 
         self.num_classes = np.max(self._train_label) + 1
 
@@ -91,6 +92,3 @@ class ModelFetcher(object):
             yield self.prep1(self._test_data[start:end, 1::self.down_sample]), batch_card, self._test_label[start:end]
             start = end
             end += self.batch_size
-
-
-
