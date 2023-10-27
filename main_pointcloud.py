@@ -63,14 +63,26 @@ writer = SummaryWriter(log_dir)
 # )
 
 
-generator = DataLoaderISIC(
+train_gen = DataLoaderISIC(
     "features/simsiam_train.csv",
     "GroundTruth.csv",
     batch_size=args.batch_size,
 )
 
+val_gen = DataLoaderISIC(
+    "features/simsiam_val.csv",
+    "GroundTruth.csv",
+    batch_size=args.batch_size,
+)
+
+test_gen = DataLoaderISIC(
+    "features/simsiam_test.csv",
+    "GroundTruth.csv",
+    batch_size=args.batch_size,
+)
+
 # model = SetTransformer(dim_hidden=args.dim, num_heads=args.n_heads, num_inds=args.n_anc)
-model = SetTransformer(100, 2, 2, num_inds=20)
+model = SetTransformer(100, 20, 20, num_inds=20)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 criterion = nn.CrossEntropyLoss()
 model = nn.DataParallel(model)
@@ -79,9 +91,7 @@ model = model.cuda()
 for epoch in range(args.train_epochs):
     model.train()
     losses, total, correct = [], 0, 0
-    for imgs, lbls in generator.train_data():
-        print(imgs)
-        print(imgs.shape)
+    for imgs, lbls in train_gen.train_data():
         imgs = torch.Tensor(imgs).cuda()
         lbls = torch.Tensor(lbls).long().cuda()
         preds = model(imgs)
@@ -103,7 +113,7 @@ for epoch in range(args.train_epochs):
     if epoch % 10 == 0:
         model.eval()
         losses, total, correct = [], 0, 0
-        for imgs, lbls in generator.test_data():
+        for imgs, lbls in val_gen.train_data():
             imgs = torch.Tensor(imgs).cuda()
             lbls = torch.Tensor(lbls).long().cuda()
             preds = model(imgs)
