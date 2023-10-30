@@ -2,9 +2,12 @@ import argparse
 import os
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from data_isic import ModelFetcherISIC, DataLoaderISIC
 from data_modelnet40 import ModelFetcher
@@ -62,67 +65,106 @@ writer = SummaryWriter(log_dir)
 #     do_augmentation=False,
 # )
 
+num_inds = 10
+
+model_name = "BYOL"
 
 train_gen = DataLoaderISIC(
-    "features/simsiam_train.csv",
+    f"features/{model_name}_train.csv",
     "GroundTruth.csv",
     batch_size=args.batch_size,
+    input_dim=num_inds
 )
 
 val_gen = DataLoaderISIC(
-    "features/simsiam_val.csv",
+    f"features/{model_name}_val.csv",
     "GroundTruth.csv",
     batch_size=args.batch_size,
+    input_dim=num_inds
 )
 
 test_gen = DataLoaderISIC(
-    "features/simsiam_test.csv",
+    f"features/{model_name}_test.csv",
     "GroundTruth.csv",
     batch_size=args.batch_size,
+    input_dim=num_inds
 )
 
 # model = SetTransformer(dim_hidden=args.dim, num_heads=args.n_heads, num_inds=args.n_anc)
-model = SetTransformer(100, 20, 20, num_inds=20)
+n_features = sum(['features' in col for col in pd.read_csv(f"features/{model_name}_val.csv").columns])
+model = SetTransformer(n_features, 10, 2, num_inds=num_inds)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-criterion = nn.CrossEntropyLoss()
+class_weights = torch.tensor([0.02, 0.98]).cuda()
+criterion = nn.CrossEntropyLoss(class_weights)
 model = nn.DataParallel(model)
 model = model.cuda()
 
 for epoch in range(args.train_epochs):
     model.train()
-    losses, total, correct = [], 0, 0
+    losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
     for imgs, lbls in train_gen.train_data():
         imgs = torch.Tensor(imgs).cuda()
         lbls = torch.Tensor(lbls).long().cuda()
         preds = model(imgs)
-        loss = criterion(preds, lbls)
+
+        # loss = criterion(preds, lbls)
+        loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         losses.append(loss.item())
-        total += lbls.shape[0]
-        correct += (preds.argmax(dim=1) == lbls).sum().item()
+        total += lbls.view(-1).shape[0]
+        correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
+
+        true_labels += lbls.view(-1).cpu().numpy().tolist()
+        predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
 
     avg_loss, avg_acc = np.mean(losses), correct / total
-    writer.add_scalar("train_loss", avg_loss)
-    writer.add_scalar("train_acc", avg_acc)
-    print(f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f}")
 
-    if epoch % 10 == 0:
+    auc = roc_auc_score(true_labels, predicted_probs)
+    balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
+
+    writer.add_scalar("train_loss", avg_loss, epoch)
+    writer.add_scalar("train_acc", avg_acc, epoch)
+    writer.add_scalar("train_auc", auc, epoch)
+    writer.add_scalar("train_balanced_acc", balanced_acc, epoch)
+
+    print(
+        f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f} train AUC {auc:.3f} train balanced acc {balanced_acc:.3f}")
+
+    # avg_loss, avg_acc = np.mean(losses), correct / total
+    # writer.add_scalar("train_loss", avg_loss)
+    # writer.add_scalar("train_acc", avg_acc)
+    # print(f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f}")
+
+    if epoch % 5 == 0:
         model.eval()
         losses, total, correct = [], 0, 0
         for imgs, lbls in val_gen.train_data():
             imgs = torch.Tensor(imgs).cuda()
             lbls = torch.Tensor(lbls).long().cuda()
             preds = model(imgs)
-            loss = criterion(preds, lbls)
+
+            loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
             losses.append(loss.item())
-            total += lbls.shape[0]
-            correct += (preds.argmax(dim=1) == lbls).sum().item()
+            total += lbls.view(-1).shape[0]
+            correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
+
+            true_labels += lbls.view(-1).cpu().numpy().tolist()
+            predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
+
         avg_loss, avg_acc = np.mean(losses), correct / total
-        writer.add_scalar("test_loss", avg_loss)
-        writer.add_scalar("test_acc", avg_acc)
-        print(f"Epoch {epoch}: test loss {avg_loss:.3f} test acc {avg_acc:.3f}")
+
+        auc = roc_auc_score(true_labels, predicted_probs)
+        balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
+
+        writer.add_scalar("test_loss", avg_loss, epoch)
+        writer.add_scalar("test_acc", avg_acc, epoch)
+        writer.add_scalar("test_auc", auc, epoch)
+        writer.add_scalar("test_balanced_acc", balanced_acc, epoch)
+
+        print(
+            f"Epoch {epoch}: test loss {avg_loss:.3f} test acc {avg_acc:.3f} test AUC {auc:.3f} test balanced acc {balanced_acc:.3f}")

@@ -45,6 +45,7 @@ class DataLoaderISIC:
 
         matching_patient_ids = self.gt[self.gt["image_name"].isin(self.train_features["image_name"])]["patient_id"]
         self.patients = matching_patient_ids.unique()
+        self.n_features = sum(['features' in col for col in self.train_features.columns])
 
     def train_data(self):
         start = 0
@@ -62,9 +63,11 @@ class DataLoaderISIC:
                         current_patient_features.append(
                             self.train_features[self.train_features["image_name"] == images[i]].filter(like="feature").values[0])
                         current_patient_labels.append(self.gt[self.gt["image_name"] == images[i]]["target"].values[0])
+                        # current_patient_labels.append(np.eye(2)[self.gt[self.gt["image_name"] == images[i]]["target"].values[0]])
                     else:
-                        current_patient_features.append(np.zeros(100))
+                        current_patient_features.append(np.zeros(self.n_features))
                         current_patient_labels.append(0)  # TODO not sre whether I should do something else
+                        # current_patient_labels.append([1, 0])
                 current_features.append(current_patient_features)
                 current_labels.append(current_patient_labels)
             current_features = np.asarray(current_features)
