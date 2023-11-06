@@ -1,5 +1,4 @@
 import argparse
-import os
 
 import numpy as np
 import pandas as pd
@@ -7,13 +6,9 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 
-from data_isic import ModelFetcherISIC, DataLoaderISIC
-from data_modelnet40 import ModelFetcher
+from data_isic import DataLoaderISIC
 from models import SetTransformer
-from modules import ISAB, PMA, SAB
-
 
 # class SetTransformer(nn.Module):
 #     def __init__(
@@ -52,9 +47,13 @@ parser.add_argument("--n_anc", type=int, default=16)
 parser.add_argument("--train_epochs", type=int, default=200)
 args = parser.parse_args()
 
-models = ("BYOL", "Moco", "SimCLR")
+#models = ("BYOL", "Moco", "SimCLR", "SimSiam")
+# models = ("Moco", "SimCLR", "SimSiam")
+
+models = ("BYOL", "Moco")
 
 for model_name in models:
+    print("Training:", model_name)
     args.exp_name = f"{model_name}Nd{args.dim}h{args.n_heads}i{args.n_anc}_lr{args.learning_rate}bs{args.batch_size}"
     log_dir = "result/" + args.exp_name
     model_path = log_dir + "/model"
@@ -105,7 +104,12 @@ for model_name in models:
     for epoch in range(args.train_epochs):
         model.train()
         losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
+
         for imgs, lbls in train_gen.train_data():
+            print(imgs.shape)
+            print(lbls.shape)
+            exit()
+
             imgs = torch.Tensor(imgs).cuda()
             lbls = torch.Tensor(lbls).long().cuda()
             preds = model(imgs)
@@ -137,6 +141,10 @@ for model_name in models:
         print(
             f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f} train AUC {auc:.3f} train balanced acc {balanced_acc:.3f}")
 
+        max_grad_norm = max(p.grad.data.norm(2).item() for p in model.parameters() if p.grad is not None)
+        num_zeros = sum((p.grad.data == 0).sum().item() for p in model.parameters() if p.grad is not None)
+        print(f"Max grad: {max_grad_norm}   Num zeros: {num_zeros}")
+
         # avg_loss, avg_acc = np.mean(losses), correct / total
         # writer.add_scalar("train_loss", avg_loss)
         # writer.add_scalar("train_acc", avg_acc)
@@ -165,9 +173,9 @@ for model_name in models:
             balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
             new_mean = (balanced_acc + auc) / 2
             if new_mean >= old_mean:
-                torch.save(model.state_dict(), f"{model_name}_{epoch}")
+                torch.save(model.state_dict(), f"models/{model_name}/{model_name}_{epoch}.pth")
+                old_mean = new_mean
 
-            old_mean = new_mean
             writer.add_scalar("test_loss", avg_loss, epoch)
             writer.add_scalar("test_acc", avg_acc, epoch)
             writer.add_scalar("test_auc", auc, epoch)
