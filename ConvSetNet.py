@@ -1,4 +1,3 @@
-import os
 from os.path import join
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -15,7 +14,7 @@ from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import models, datasets, transforms
+from torchvision import models, transforms
 from torchvision.models import ResNet50_Weights
 
 from models import SetTransformer
@@ -25,14 +24,15 @@ def main():
     n_imgs_patient = 10
     img_size = 300
     n_classes = 2
-    batch_size = 4
+    batch_size = 2
     epochs = 200
     lr = 1e-3
+    feature_size = 2048
 
-    dataset_path = "/media/jules/Transcend/Datasets/isic/ISIC_2020/debug/"
-    outpath = "./debug"
+    dataset_path = "/home/jules.collenne/ISIC_2020/train/"
+    outpath = "/home/jules.collenne/set_transformer_ISIC/ConvSetNet"
 
-    train_gen, val_gen, tets_gen = get_datagen(dataset_path, batch_size, img_size)
+    train_gen, val_gen, tets_gen = get_datagen(dataset_path, batch_size, img_size, n_imgs_patient, feature_size)
 
     backbone = ResNetBackbone()
 
@@ -47,42 +47,42 @@ def main():
 
 
 class CustomDataset(Dataset):
-    def __init__(self, csv_file, root_dir, batch_size, ipp, transform=None):
+    def __init__(self, csv_file, root_dir, ipp, feature_size, transform=None):
         self.df = pd.read_csv(csv_file)
         self.root_dir = root_dir
-        self.batch_size = batch_size
         self.ipp = ipp
         self.transform = transform
         self.patients = self.df['patient_id'].unique()
+        self.feature_size = feature_size
 
     def __len__(self):
-        return len(self.df) // (self.batch_size * self.ipp)
+        return len(self.patients)
 
     def __getitem__(self, idx):
-        start_idx = idx * self.batch_size
-        end_idx = (idx + 1) * self.batch_size
-        patient_ids = self.patients[start_idx:end_idx]
-        filtered_df = self.df[self.df['patient_id'].isin(patient_ids)]
-        data = []
-        for patient in patient_ids:
-            images = []
-            patient_target = filtered_df[filtered_df["patient_id"] == patient]
-            patient_images = filtered_df[filtered_df["patient_id"] == patient]["image_name"]
-            for i in range(self.ipp):
-                if i <= len(patient_images):
-                    images.append(
-                        self.transform(Image.open(join(self.root_dir, "mel" if patient_target[i] == 1 else "nev",
-                                                  patient_images[i]+".jpg"))))
-                else:
-                    images.append("null")
-            data.append(images)
+        patient_ids = self.patients[idx]
+        filtered_df = self.df[self.df['patient_id'] == patient_ids]
+        targets = []
+        images = []
+        patient_target = filtered_df[filtered_df["patient_id"] == patient_ids]["target"].values
+        patient_images = filtered_df[filtered_df["patient_id"] == patient_ids]["image_name"].values
+        for i in range(self.ipp):
+            if i < len(patient_images):
+                images.append(
+                    self.transform(Image.open(join(self.root_dir, "mel" if patient_target[i] == 1 else "nev",
+                                                   patient_images[i] + ".jpg"))))
+                targets.append(patient_target[i])
+            else:
+                images.append(torch.zeros(3, 300, 300))
+                targets.append(0)
 
-        data = np.asarray(data)
-        return data
+        data_tensor = torch.stack(images)
+        targets_tensor = torch.tensor(targets)
+
+        return data_tensor, targets_tensor
 
 
-def get_datagen(dataset_path, batch_size, image_size, ipp):
-    transform = TrainTransform()
+def get_datagen(dataset_path, batch_size, image_size, ipp, feature_size):
+    transform = TrainTransform(input_size=image_size)
 
     test_transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
@@ -90,16 +90,13 @@ def get_datagen(dataset_path, batch_size, image_size, ipp):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    train_dataset = CustomDataset("/media/jules/Transcend/Datasets/isic/ISIC_2020/y_train.csv",
-                                  join(dataset_path, "train"), batch_size, ipp=ipp, transform=transform)
+    train_dataset = CustomDataset("/home/jules.collenne/ISIC_2020/y_train.csv", join(dataset_path, "train"), ipp=ipp, feature_size=feature_size, transform=transform)
     train_gen = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    val_dataset = CustomDataset("/media/jules/Transcend/Datasets/isic/ISIC_2020/y_val.csv",
-                                  join(dataset_path, "val"), batch_size, ipp=ipp, transform=transform)
+    val_dataset = CustomDataset("/home/jules.collenne/ISIC_2020/y_val.csv", join(dataset_path, "val"), ipp=ipp, feature_size=feature_size, transform=transform)
     val_gen = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 
-    test_dataset = CustomDataset("/media/jules/Transcend/Datasets/isic/ISIC_2020/y_test.csv",
-                                  join(dataset_path, "train"), batch_size, ipp=ipp, transform=test_transform)
+    test_dataset = CustomDataset("/home/jules.collenne/ISIC_2020/y_test.csv", join(dataset_path, "test"), ipp=ipp, feature_size=feature_size, transform=test_transform)
     test_gen = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, drop_last=False)
 
     return train_gen, val_gen, test_gen
@@ -111,7 +108,7 @@ class ResNetBackbone(nn.Module):
         super(ResNetBackbone, self).__init__()
         self.resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT if pretrained else None)
         # Remove the final classification layer
-        self.resnet = nn.Sequential(*list(self.resnet.children())[:-2])
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
         self.feature_size = 2048
         self.name = "ResNet-50"
 
@@ -132,7 +129,7 @@ class ConvSetNet(nn.Module):
 
     def forward(self, images):
         # Get features from the backbone
-        features = self.backbone(images)
+        features = torch.stack([self.backbone(image) for image in images]).squeeze()
 
         # Pass the features to the SetTransformer (assuming set_transformer accepts features as input)
         set_transformer_output = self.set_transformer(features)
@@ -160,6 +157,7 @@ class Training:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def train(self):
+        print("Training", self.model.name)
         self.model = nn.DataParallel(self.model)
         self.model = self.model.cuda()
         for epoch in range(self.epochs):
@@ -235,7 +233,7 @@ class Training:
         balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
         new_mean = (balanced_acc + auc) / 2
         if new_mean >= self.old_mean:
-            torch.save(self.model.state_dict(), f"models/{self.model.name}/{self.model.name}_{epoch}.pth")
+            torch.save(self.model.state_dict(), f"/home/jules.collenne/set_transformer_ISIC/ConvSetNet/models/{self.model.module.name}/{self.model.module.name}_{epoch}.pth")
             self.old_mean = new_mean
 
         self.writer.add_scalar("test_loss", avg_loss, epoch)
@@ -251,7 +249,7 @@ class Training:
 class TrainTransform:
     def __init__(
             self,
-            input_size: int = 224,
+            input_size: int = 300,
             cj_prob: float = 0.8,
             cj_strength: float = 1.0,
             cj_bright: float = 0.4,
@@ -277,7 +275,7 @@ class TrainTransform:
         )
 
         transform = [
-            T.RandomResizedCrop(size=input_size, scale=(min_scale, 1.0)),
+            T.RandomResizedCrop(size=(input_size, input_size), scale=(min_scale, 1.0)),
             random_rotation_transform(rr_prob=rr_prob, rr_degrees=rr_degrees),
             T.RandomHorizontalFlip(p=hf_prob),
             T.RandomVerticalFlip(p=vf_prob),
@@ -290,7 +288,7 @@ class TrainTransform:
             transform += [T.Normalize(mean=normalize["mean"], std=normalize["std"])]
         self.transform = T.Compose(transform)
 
-    def __call__(self, image: Union[Tensor, Image]) -> Tensor:
+    def __call__(self, image: Union[Tensor, Image.Image]) -> Tensor:
         transformed: Tensor = self.transform(image)
         return transformed
 
