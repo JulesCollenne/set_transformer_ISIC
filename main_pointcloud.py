@@ -16,13 +16,14 @@ parser.add_argument("--batch_size", type=int, default=64)
 parser.add_argument("--dim", type=int, default=256)
 parser.add_argument("--n_heads", type=int, default=4)
 parser.add_argument("--n_anc", type=int, default=16)
-parser.add_argument("--train_epochs", type=int, default=50)
+parser.add_argument("--train_epochs", type=int, default=100)
 args = parser.parse_args()
 
 
 def main():
-    n_run = 5
-    models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
+    n_run = 2
+    # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
+    models = ["CNN"]
     # models = ("Moco", "SimCLR", "SimSiam")
     # models = ("BYOL", "Moco")
 
@@ -54,7 +55,7 @@ def main():
             input_dim=num_inds
         )
 
-        n_features = sum(['features' in col for col in pd.read_csv(f"features/{model_name}_val.csv").columns])
+        n_features = sum(['feature' in col for col in pd.read_csv(f"features/{model_name}_val.csv").columns])
 
         all_auc, all_bacc, all_sens, all_spec = [], [], [], []
 
@@ -95,7 +96,7 @@ def main():
                 auc = roc_auc_score(true_labels, predicted_probs)
                 balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
 
-                if epoch % 10 == 0:
+                if epoch % 1 == 0:
                     print(
                         f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f} train AUC {auc:.3f}"
                         f" train balanced acc {balanced_acc:.3f}")
@@ -193,6 +194,7 @@ def main():
 
             avg_loss, avg_acc = np.mean(losses), correct / total
 
+            np.savetxt(f"predictions/{model_name}{run}", np.array(predicted_probs), delimiter=",")
             binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
 
             conf_matrix = confusion_matrix(true_labels, binary_predictions)

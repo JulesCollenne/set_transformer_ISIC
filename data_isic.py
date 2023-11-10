@@ -44,7 +44,7 @@ class DataLoaderISIC:
 
         matching_patient_ids = self.gt[self.gt["image_name"].isin(self.train_features["image_name"])]["patient_id"]
         self.patients = matching_patient_ids.unique()
-        self.n_features = sum(['features' in col for col in self.train_features.columns])
+        self.n_features = sum(['feature' in col for col in self.train_features.columns])
 
     def train_data(self):
         start = 0

@@ -29,12 +29,13 @@ def main():
     lr = 1e-3
     feature_size = 2048
 
-    dataset_path = "/home/jules.collenne/ISIC_2020/train/"
-    outpath = "/home/jules.collenne/set_transformer_ISIC/ConvSetNet"
+    dataset_path = "/media/jules/Transcend/Datasets/isic/ISIC_2020/train2/"
+    outpath = "./ConvSetNet"
 
     train_gen, val_gen, tets_gen = get_datagen(dataset_path, batch_size, img_size, n_imgs_patient, feature_size)
 
     backbone = ResNetBackbone()
+    hooks = register_hooks(backbone)
 
     set_transformer = SetTransformer(backbone.feature_size, n_imgs_patient, n_classes, num_inds=n_imgs_patient)
 
@@ -81,6 +82,16 @@ class ConvSetNet(nn.Module):
         # predictions = self.final_classifier(set_transformer_output)
 
         return set_transformer_output
+
+
+def register_hooks(model):
+    hooks = []
+
+    for param in model.parameters():
+        hook = param.register_hook(lambda grad: print(grad))
+        hooks.append(hook)
+
+    return hooks
 
 
 class Training:
@@ -156,19 +167,20 @@ class Training:
     def validate(self, epoch):
         self.model.eval()
         losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
-        for imgs, lbls in self.val_gen:
-            imgs = torch.Tensor(imgs).cuda()
-            lbls = torch.Tensor(lbls).long().cuda()
-            preds = self.model(imgs)
+        with torch.no_grad():
+            for imgs, lbls in self.val_gen:
+                imgs = torch.Tensor(imgs).cuda()
+                lbls = torch.Tensor(lbls).long().cuda()
+                preds = self.model(imgs)
 
-            loss = self.criterion(preds.view(-1, 2), lbls.view(-1))
+                loss = self.criterion(preds.view(-1, 2), lbls.view(-1))
 
-            losses.append(loss.item())
-            total += lbls.view(-1).shape[0]
-            correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
+                losses.append(loss.item())
+                total += lbls.view(-1).shape[0]
+                correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
 
-            true_labels += lbls.view(-1).cpu().numpy().tolist()
-            predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
+                true_labels += lbls.view(-1).cpu().numpy().tolist()
+                predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
 
         avg_loss, avg_acc = np.mean(losses), correct / total
 
