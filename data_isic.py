@@ -50,18 +50,18 @@ class DataLoaderISIC:
         start = 0
         end = self.batch_size
         while end < len(self.patients):
-            current_patients = self.patients[start:end]
-            current_images = [self.gt[self.gt["patient_id"] == pid]["image_name"].values for pid in current_patients]
+            patients_names = self.patients[start:end]
+            patients_imgs = [self.gt[self.gt["patient_id"] == pid]["image_name"].values for pid in patients_names]
             current_features = []
             current_labels = []
-            for pnum, images in enumerate(current_images):
+            for pnum, current_patient_imgs in enumerate(patients_imgs):
                 current_patient_features = []
                 current_patient_labels = []
                 for i in range(self.input_dim):
-                    if i < len(images):  # If a patient has more images than needed
+                    if i < len(current_patient_imgs):  # If a patient has more images than needed
                         current_patient_features.append(
-                            self.train_features[self.train_features["image_name"] == images[i]].filter(like="feature").values[0])
-                        current_patient_labels.append(self.gt[self.gt["image_name"] == images[i]]["target"].values[0])
+                            self.train_features[self.train_features["image_name"] == current_patient_imgs[i]].filter(like="feature").values[0])
+                        current_patient_labels.append(self.gt[self.gt["image_name"] == current_patient_imgs[i]]["target"].values[0])
                         # current_patient_labels.append(np.eye(2)[self.gt[self.gt["image_name"] == images[i]]["target"].values[0]])
                     else:
                         current_patient_features.append(np.zeros(self.n_features))

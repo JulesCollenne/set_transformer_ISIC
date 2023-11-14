@@ -11,19 +11,19 @@ from models import SetTransformer
 
 parser = argparse.ArgumentParser()
 # parser.add_argument("--num_pts", type=int, default=1000)
-parser.add_argument("--learning_rate", type=float, default=1e-3)
+parser.add_argument("--learning_rate", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=64)
 parser.add_argument("--dim", type=int, default=256)
-parser.add_argument("--n_heads", type=int, default=4)
+parser.add_argument("--n_heads", type=int, default=8)
 parser.add_argument("--n_anc", type=int, default=16)
-parser.add_argument("--train_epochs", type=int, default=100)
+parser.add_argument("--train_epochs", type=int, default=40)
 args = parser.parse_args()
 
 
 def main():
-    n_run = 2
+    n_run = 4
     # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
-    models = ["CNN"]
+    models = ["reduced_CNN"]
     # models = ("Moco", "SimCLR", "SimSiam")
     # models = ("BYOL", "Moco")
 
@@ -32,7 +32,8 @@ def main():
         args.exp_name = f"{model_name}Nd{args.dim}h{args.n_heads}i{args.n_anc}_lr{args.learning_rate}" \
                         f"bs{args.batch_size}"
 
-        num_inds = 10
+        num_inds = 20
+        n_classes = 2
 
         train_gen = DataLoaderISIC(
             f"features/{model_name}_train.csv",
@@ -60,10 +61,11 @@ def main():
         all_auc, all_bacc, all_sens, all_spec = [], [], [], []
 
         for run in range(n_run):
-            model = SetTransformer(n_features, 10, 2, num_inds=num_inds)
+            model = SetTransformer(n_features, num_inds, n_classes, num_inds=num_inds)
             model = nn.DataParallel(model)
             model = model.cuda()
-            optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+            # optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+            optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
             class_weights = torch.tensor([0.02, 0.98]).cuda()
             criterion = nn.CrossEntropyLoss(class_weights)
             old_mean = 0
@@ -78,6 +80,12 @@ def main():
                     preds = model(imgs)
 
                     # loss = criterion(preds, lbls)
+
+                    zero_rows_mask = torch.all(imgs == 0, dim=2)
+                    non_zero_rows_mask = ~zero_rows_mask
+                    preds = preds[non_zero_rows_mask]
+                    lbls = lbls[non_zero_rows_mask]
+
                     loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
                     optimizer.zero_grad()
@@ -107,11 +115,16 @@ def main():
 
                 if epoch % 1 == 0:
                     model.eval()
-                    losses, total, correct = [], 0, 0
+                    losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
                     for imgs, lbls in val_gen.train_data():
                         imgs = torch.Tensor(imgs).cuda()
                         lbls = torch.Tensor(lbls).long().cuda()
                         preds = model(imgs)
+
+                        zero_rows_mask = torch.all(imgs == 0, dim=2)
+                        non_zero_rows_mask = ~zero_rows_mask
+                        preds = preds[non_zero_rows_mask]
+                        lbls = lbls[non_zero_rows_mask]
 
                         loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
@@ -128,21 +141,21 @@ def main():
                     balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
                     new_mean = (balanced_acc + auc) / 2
                     if new_mean >= old_mean:
-                        torch.save(model.state_dict(), f"models/{model_name}/{model_name}.pth")
+                        torch.save(model.state_dict(), f"models/{model_name}/{model_name}{run}{num_inds}.pth")
                         old_mean = new_mean
 
-                    if epoch % 10 == 0:
+                    if epoch % 1 == 0:
                         print(
                             f"Epoch {epoch}: val loss {avg_loss:.3f} test acc {avg_acc:.3f} test AUC {auc:.3f} "
                             f"test balanced acc {balanced_acc:.3f}")
 
-            model = SetTransformer(n_features, 10, 2, num_inds=num_inds)
+            model = SetTransformer(n_features, num_inds, n_classes, num_inds=num_inds)
             model = nn.DataParallel(model)
             model = model.cuda()
 
             # checkpoint = torch.load(f"models/{model_name}/{model_name}.pth")
             # model.load_state_dict(checkpoint["state_dict"])
-            model.load_state_dict(torch.load(f"models/{model_name}/{model_name}.pth"))
+            model.load_state_dict(torch.load(f"models/{model_name}/{model_name}{run}{num_inds}.pth"))
             model.eval()
 
             losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
@@ -150,6 +163,11 @@ def main():
                 imgs = torch.Tensor(imgs).cuda()
                 lbls = torch.Tensor(lbls).long().cuda()
                 preds = model(imgs)
+
+                zero_rows_mask = torch.all(imgs == 0, dim=2)
+                non_zero_rows_mask = ~zero_rows_mask
+                preds = preds[non_zero_rows_mask]
+                lbls = lbls[non_zero_rows_mask]
 
                 loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
@@ -165,7 +183,7 @@ def main():
             auc = roc_auc_score(true_labels, predicted_probs)
             best_bacc = 0
             best_thresh = 0
-            thresholds = np.linspace(0, 1, 50)
+            thresholds = np.linspace(0, 1, 5)
 
             for thresh in thresholds:
                 balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > thresh).astype(int))
@@ -183,6 +201,11 @@ def main():
                 lbls = torch.Tensor(lbls).long().cuda()
                 preds = model(imgs)
 
+                zero_rows_mask = torch.all(imgs == 0, dim=2)
+                non_zero_rows_mask = ~zero_rows_mask
+                preds = preds[non_zero_rows_mask]
+                lbls = lbls[non_zero_rows_mask]
+
                 loss = criterion(preds.view(-1, 2), lbls.view(-1))
 
                 losses.append(loss.item())
@@ -194,7 +217,7 @@ def main():
 
             avg_loss, avg_acc = np.mean(losses), correct / total
 
-            np.savetxt(f"predictions/{model_name}{run}", np.array(predicted_probs), delimiter=",")
+            np.savetxt(f"predictions/{model_name}{run}{num_inds}", np.array(predicted_probs), delimiter=",")
             binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
 
             conf_matrix = confusion_matrix(true_labels, binary_predictions)
