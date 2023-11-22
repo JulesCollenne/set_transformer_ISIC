@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import pandas as pd
 
@@ -55,6 +57,7 @@ class DataLoaderISIC:
             current_features = []
             current_labels = []
             for pnum, current_patient_imgs in enumerate(patients_imgs):
+                random.shuffle(current_patient_imgs)
                 current_patient_features = []
                 current_patient_labels = []
                 for i in range(self.input_dim):
@@ -69,6 +72,41 @@ class DataLoaderISIC:
                         # current_patient_labels.append([1, 0])
                 current_features.append(current_patient_features)
                 current_labels.append(current_patient_labels)
+            current_features = np.asarray(current_features)
+            current_labels = np.asarray(current_labels)
+            yield current_features, current_labels
+            end += self.batch_size
+            start += self.batch_size
+
+    def test_data(self):
+        start = 0
+        end = self.batch_size
+        while end < len(self.patients):
+            patients_names = self.patients[start:end]
+            patients_imgs = [self.gt[self.gt["patient_id"] == pid]["image_name"].values for pid in patients_names]
+            current_features = []
+            current_labels = []
+            for pnum, current_patient_imgs in enumerate(patients_imgs):
+                random.shuffle(current_patient_imgs)
+                current_patient_features = []
+                current_patient_labels = []
+
+                for i in range(len(current_patient_imgs) // self.input_dim):
+                    for j in range(self.input_dim):
+                        if i*self.input_dim+j < len(current_patient_imgs):
+                            current_patient_features.append(
+                                self.train_features[
+                                    self.train_features["image_name"] == current_patient_imgs[i]].filter(
+                                    like="feature").values[0])
+                            current_patient_labels.append(
+                                self.gt[self.gt["image_name"] == current_patient_imgs[i]]["target"].values[0])
+                        else:
+                            current_patient_features.append(np.zeros(self.n_features))
+                            current_patient_labels.append(0)
+
+                    current_features.append(current_patient_features)
+                    current_labels.append(current_patient_labels)
+
             current_features = np.asarray(current_features)
             current_labels = np.asarray(current_labels)
             yield current_features, current_labels
