@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.metrics import roc_auc_score, balanced_accuracy_score, confusion_matrix
+from matplotlib import pyplot as plt
+from sklearn.metrics import roc_auc_score, balanced_accuracy_score, confusion_matrix, roc_curve
 
 from data_isic import DataLoaderISIC
 from modules import ISAB, PMA, SAB
@@ -32,7 +33,7 @@ class ResConvSet(nn.Module):
             SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
             SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
             nn.Linear(dim_hidden, dim_inner_output))
-        self.prediction = nn.Linear(dim_input+2, dim_output)
+        self.prediction = nn.Linear(dim_input+dim_inner_output, dim_output)
 
     def forward(self, X):
         x = self.dec(self.enc(X))
@@ -42,14 +43,24 @@ class ResConvSet(nn.Module):
 
 def main():
     n_run = 4
-    models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
-    # models = ["reduced_CNN"]
+    # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
+    models = ["reduced_CNN"]
     # models = ("Moco", "SimCLR", "SimSiam")
     # models = ("BYOL", "Moco")
 
-    do_training = False
+    do_training = True
     do_testing = True
     visualize_preds = False
+
+    plt.figure(figsize=(8, 6))
+
+    les_best_thresholds = {
+        "BYOL": [0.490, 0.490, 0.469, 0.469],
+        "Moco": [0.510, 0.531, 0.510, 0.531],
+        "SimCLR": [0.429, 0.490, 0.408, 0.388],
+        "SimSiam": [0.510, 0.531, 0.510, 0.490],
+        "SwaV": [0.551, 0.469, 0.490, 0.571],
+    }
 
     for model_name in models:
         print("Training:", model_name)
@@ -58,7 +69,7 @@ def main():
 
         num_inds = 20
         n_classes = 2
-        dim_inner_output = 2
+        dim_inner_output = 10
         patience = 15
 
         train_gen = DataLoaderISIC(
@@ -85,6 +96,8 @@ def main():
         n_features = sum(['feature' in col for col in pd.read_csv(f"features/{model_name}_val.csv").columns])
 
         all_auc, all_bacc, all_sens, all_spec = [], [], [], []
+        all_tpr, all_fpr = [], []
+        base_fpr = np.linspace(0, 1, 101)
 
         class_weights = torch.tensor([0.02, 0.98]).cuda()
         criterion = nn.CrossEntropyLoss(class_weights)
@@ -109,25 +122,7 @@ def main():
                 model.load_state_dict(torch.load(f"models/{outname}"))
                 model.eval()
 
-                losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
-                for imgs, lbls in val_gen.train_data():
-                    imgs = torch.Tensor(imgs).cuda()
-                    lbls = torch.Tensor(lbls).long().cuda()
-                    preds = model(imgs)
-
-                    zero_rows_mask = torch.all(imgs == 0, dim=2)
-                    non_zero_rows_mask = ~zero_rows_mask
-                    preds = preds[non_zero_rows_mask]
-                    lbls = lbls[non_zero_rows_mask]
-
-                    loss = criterion(preds.view(-1, 2), lbls.view(-1))
-
-                    losses.append(loss.item())
-                    total += lbls.view(-1).shape[0]
-                    correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
-
-                    true_labels += lbls.view(-1).cpu().numpy().tolist()
-                    predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
+                losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion)
 
                 avg_loss, avg_acc = np.mean(losses), correct / total
 
@@ -169,8 +164,7 @@ def main():
 
                 avg_loss, avg_acc = np.mean(losses), correct / total
 
-                data = pd.DataFrame({'p1': [pred[0] for pred in predicted_probs],
-                                     'p2': [pred[1] for pred in predicted_probs],
+                data = pd.DataFrame({'p': [pred for pred in predicted_probs],
                                      'target': true_labels})
                 # np.savetxt(f"predictions/{model_name}_{run}_{num_inds}", np.array(predicted_probs), delimiter=",")
                 data.to_csv(f"predictions/{model_name}_{run}_{num_inds}.csv", index=False)
@@ -186,40 +180,107 @@ def main():
                 all_bacc.append(balanced_accuracy_score(true_labels, binary_predictions))
                 all_sens.append(sensitivity)
                 all_spec.append(specificity)
+                fpr, tpr, thresholds = roc_curve(true_labels, predicted_probs)
+                tpr = np.interp(base_fpr, fpr, tpr)
+                tpr[0] = 0.0
+                all_tpr.append(tpr)
+                all_fpr.append(fpr)
 
                 print(
                     f"test loss {avg_loss:.3f} test acc {avg_acc:.3f} test AUC {all_auc[-1]:.3f}"
                     f" test balanced acc {all_bacc[-1]:.3f}")
 
-        # if visualize_preds:
-        #     np.savetxt(f"predictions/{model_name}_{run}_{num_inds}", np.array(predicted_probs), delimiter=",")
-        #     predicted_probs = np.loadtxt()
-        #     binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
-        #
-        #     conf_matrix = confusion_matrix(true_labels, binary_predictions)
-        #
-        #     tn, fp, fn, tp = conf_matrix.ravel()
-        #     sensitivity = tp / (tp + fn)
-        #     specificity = tn / (tn + fp)
-        #
-        #     all_auc.append(roc_auc_score(true_labels, predicted_probs))
-        #     all_bacc.append(balanced_accuracy_score(true_labels, binary_predictions))
-        #     all_sens.append(sensitivity)
-        #     all_spec.append(specificity)
-        #
-        #     print(
-        #         f"test loss {avg_loss:.3f} test acc {avg_acc:.3f} test AUC {all_auc[-1]:.3f}"
-        #         f" test balanced acc {all_bacc[-1]:.3f}")
+            if visualize_preds:
+                data = pd.read_csv(f"predictions/{model_name}_{run}_{num_inds}.csv")
+                true_labels = data["target"]
+                predicted_probs = data["p"]
 
-        print(model_name)
-        print(
-            f"test AUC {np.mean(all_auc):.3f} +/- {np.std(all_auc)} "
-            f"test bacc {np.mean(all_bacc):.3f} +/- {np.std(all_bacc)} "
-            f"test sensitivity {np.mean(all_sens):.3f} +/- {np.std(all_sens)} "
-            f"test specificity {np.mean(all_spec):.3f} +/- {np.std(all_spec)}")
+                best_thresh = les_best_thresholds[model_name][run]
+
+                binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
+
+                conf_matrix = confusion_matrix(true_labels, binary_predictions)
+
+                tn, fp, fn, tp = conf_matrix.ravel()
+                sensitivity = tp / (tp + fn)
+                specificity = tn / (tn + fp)
+
+                all_auc.append(roc_auc_score(true_labels, predicted_probs))
+                all_bacc.append(balanced_accuracy_score(true_labels, binary_predictions))
+                all_sens.append(sensitivity)
+                all_spec.append(specificity)
+                fpr, tpr, thresholds = roc_curve(true_labels, predicted_probs)
+                tpr = np.interp(base_fpr, fpr, tpr)
+                tpr[0] = 0.0
+                all_tpr.append(tpr)
+                all_fpr.append(fpr)
+
+        if visualize_preds:
+            print(model_name)
+            print(
+                f"test AUC {np.mean(all_auc):.3f} +/- {np.std(all_auc)} "
+                f"test bacc {np.mean(all_bacc):.3f} +/- {np.std(all_bacc)} "
+                f"test sensitivity {np.mean(all_sens):.3f} +/- {np.std(all_sens)} "
+                f"test specificity {np.mean(all_spec):.3f} +/- {np.std(all_spec)}")
+
+            plot_average_roc(all_tpr, base_fpr, all_auc, model_name)
+
+    plt.plot([0, 1], [0, 1], linestyle='--', color='r', label='Random Guessing')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Average ROC Curve with Standard Deviation')
+    plt.legend(loc='lower right')
+    plt.grid()
+    plt.savefig('roc_curve_with_std.png', dpi=300, bbox_inches='tight')
 
 
-def train(model, train_gen, val_gen, criterion, outname, patience):
+def plot_average_roc(all_tpr, base_fpr, all_auc, model_name):
+    color = {"BYOL": 'blue',
+             "Moco": 'green',
+             "SwaV": 'red',
+             "SimSiam": 'orange',
+             "SimCLR": 'indigo'}
+    # mean_fpr = np.mean(all_fpr, axis=0)
+    mean_tpr = np.mean(all_tpr, axis=0)
+    std_tpr = np.std(all_tpr, axis=0)
+
+    mean_auc = np.mean(all_auc)
+    std_auc = np.std(all_auc)
+
+    plt.plot(base_fpr, mean_tpr, color=color[model_name],
+             label=f'{model_name}: Mean AUC={mean_auc:.2f}')
+
+    plt.fill_between(base_fpr, mean_tpr - std_tpr, mean_tpr + std_tpr, color=color[model_name], alpha=0.3)
+
+    # Plot ROC curve for each run (optional)
+    # for i in range(len(all_fpr)):
+    #     plt.plot(all_fpr[i], all_tpr[i], alpha=0.3)
+
+
+def do_one_epoch(gen, model, criterion):
+    losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
+    for imgs, lbls in gen.train_data():
+        imgs = torch.Tensor(imgs).cuda()
+        lbls = torch.Tensor(lbls).long().cuda()
+        preds = model(imgs)
+
+        zero_rows_mask = torch.all(imgs == 0, dim=2)
+        non_zero_rows_mask = ~zero_rows_mask
+        preds = preds[non_zero_rows_mask]
+        lbls = lbls[non_zero_rows_mask]
+
+        loss = criterion(preds.view(-1, 2), lbls.view(-1))
+
+        losses.append(loss.item())
+        total += lbls.view(-1).shape[0]
+        correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
+
+        true_labels += lbls.view(-1).cpu().numpy().tolist()
+        predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
+    return losses, total, correct, true_labels, predicted_probs
+
+
+def train(model, train_gen, val_gen, criterion, outname, patience, print_freq=1, val_freq=1):
     model = nn.DataParallel(model)
     model = model.cuda()
     # optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -229,39 +290,13 @@ def train(model, train_gen, val_gen, criterion, outname, patience):
 
     for epoch in range(args.train_epochs):
         model.train()
-        losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
-
-        for imgs, lbls in train_gen.train_data():
-            imgs = torch.Tensor(imgs).cuda()
-            lbls = torch.Tensor(lbls).long().cuda()
-            preds = model(imgs)
-
-            # loss = criterion(preds, lbls)
-
-            zero_rows_mask = torch.all(imgs == 0, dim=2)
-            non_zero_rows_mask = ~zero_rows_mask
-            preds = preds[non_zero_rows_mask]
-            lbls = lbls[non_zero_rows_mask]
-
-            loss = criterion(preds.view(-1, 2), lbls.view(-1))
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            losses.append(loss.item())
-            total += lbls.view(-1).shape[0]
-            correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
-
-            true_labels += lbls.view(-1).cpu().numpy().tolist()
-            predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
-
+        losses, total, correct, true_labels, predicted_probs = do_one_epoch(train_gen, model, criterion)
         avg_loss, avg_acc = np.mean(losses), correct / total
 
         auc = roc_auc_score(true_labels, predicted_probs)
         balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
 
-        if epoch % 1 == 0:
+        if epoch % print_freq == 0:
             print(
                 f"Epoch {epoch}: train loss {avg_loss:.3f} train acc {avg_acc:.3f} train AUC {auc:.3f}"
                 f" train balanced acc {balanced_acc:.3f}")
@@ -270,33 +305,15 @@ def train(model, train_gen, val_gen, criterion, outname, patience):
         # num_zeros = sum((p.grad.data == 0).sum().item() for p in model.parameters() if p.grad is not None)
         # print(f"Max grad: {max_grad_norm}   Num zeros: {num_zeros}")
 
-        if epoch % 1 == 0:
+        if epoch % val_freq == 0:
             model.eval()
-            losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
-            for imgs, lbls in val_gen.train_data():
-                imgs = torch.Tensor(imgs).cuda()
-                lbls = torch.Tensor(lbls).long().cuda()
-                preds = model(imgs)
-
-                zero_rows_mask = torch.all(imgs == 0, dim=2)
-                non_zero_rows_mask = ~zero_rows_mask
-                preds = preds[non_zero_rows_mask]
-                lbls = lbls[non_zero_rows_mask]
-
-                loss = criterion(preds.view(-1, 2), lbls.view(-1))
-
-                losses.append(loss.item())
-                total += lbls.view(-1).shape[0]
-                correct += (preds.view(-1, 2).argmax(dim=1) == lbls.view(-1)).sum().item()
-
-                true_labels += lbls.view(-1).cpu().numpy().tolist()
-                predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
-
+            losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion)
             avg_loss, avg_acc = np.mean(losses), correct / total
 
             auc = roc_auc_score(true_labels, predicted_probs)
             balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
             new_mean = (balanced_acc + auc) / 2
+
             if new_mean >= old_mean:
                 torch.save(model.state_dict(), f"models/{outname}")
                 old_mean = new_mean
@@ -308,10 +325,9 @@ def train(model, train_gen, val_gen, criterion, outname, patience):
                 print("Stopping training.")
                 break
 
-            if epoch % 1 == 0:
-                print(
-                    f"Epoch {epoch}: val loss {avg_loss:.3f} val acc {avg_acc:.3f} val AUC {auc:.3f} "
-                    f"val balanced acc {balanced_acc:.3f}")
+            print(
+                f"Epoch {epoch}: val loss {avg_loss:.3f} val acc {avg_acc:.3f} val AUC {auc:.3f} "
+                f"val balanced acc {balanced_acc:.3f}")
 
 
 if __name__ == "__main__":

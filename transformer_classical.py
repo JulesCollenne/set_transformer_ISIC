@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 
 class Transformer(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_heads, num_layers, dropout):
+    def __init__(self, input_dim, hidden_dim=128, num_heads=4, num_layers=2, dropout=0., output_dim=2):
         super(Transformer, self).__init__()
 
         self.embedding = nn.Linear(input_dim, hidden_dim)
@@ -37,7 +37,7 @@ class Transformer(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
 
-        self.output_layer = nn.Linear(hidden_dim, input_dim)
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
         embedded = self.embedding(x)
@@ -53,8 +53,8 @@ class Transformer(nn.Module):
 
 def main():
     n_run = 4
-    models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
-    # models = ["reduced_CNN"]
+    # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV", "reduced_CNN")
+    models = ["reduced_CNN"]
     # models = ("Moco", "SimCLR", "SimSiam")
     # models = ("BYOL", "Moco")
 
@@ -100,16 +100,16 @@ def main():
         criterion = nn.CrossEntropyLoss(class_weights)
 
         for run in range(n_run):
-            outname = f"{model_name}/residual_{model_name}_{run}_{num_inds}_{dim_inner_output}.pth"
+            outname = f"{model_name}/classical_{model_name}_{run}_{num_inds}_{dim_inner_output}.pth"
             # outname = f"{model_name}/residual_{model_name}_{run}_{num_inds}.pth"
             if do_training:
-                model = ResConvSet(n_features, num_inds, n_classes, num_inds=num_inds, num_heads=args.n_heads,
-                                   dim_inner_output=dim_inner_output)
+                model = Transformer(n_features, num_heads=args.n_heads,
+                                    output_dim=n_classes)
                 train(model, train_gen, val_gen, criterion, outname, patience)
 
             if do_testing:
-                model = ResConvSet(n_features, num_inds, n_classes, num_inds=num_inds, num_heads=args.n_heads,
-                                   dim_inner_output=dim_inner_output)
+                model = Transformer(n_features, num_heads=args.n_heads,
+                                    output_dim=n_classes)
 
                 model = nn.DataParallel(model)
                 model = model.cuda()
@@ -158,7 +158,7 @@ def main():
 
                 losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
                 # for imgs, lbls in test_gen.train_data():
-                for imgs, lbls in test_gen.test_data():
+                for imgs, lbls in test_gen.train_data():
                     imgs = torch.Tensor(imgs).cuda()
                     lbls = torch.Tensor(lbls).long().cuda()
                     preds = model(imgs)
@@ -179,7 +179,7 @@ def main():
 
                 avg_loss, avg_acc = np.mean(losses), correct / total
 
-                np.savetxt(f"predictions/{model_name}_{run}_{num_inds}", np.array(predicted_probs), delimiter=",")
+                np.savetxt(f"predictions/{outname}", np.array(predicted_probs), delimiter=",")
                 binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
 
                 conf_matrix = confusion_matrix(true_labels, binary_predictions)
