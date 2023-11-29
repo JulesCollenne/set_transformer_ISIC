@@ -9,36 +9,53 @@ from residualconvset import plot_average_roc, ResConvSet
 from transformer_comparison import DataLoaderISIC
 
 
-def main():
-    num_inds = 20
-    n_classes = 2
-    dim_inner_output = 10
-    n_heads = 8
-
-
-class Experiment:
-    def __init__(self):
-        self.train = None
-
-    def run(self):
-        n_run = 4
-        # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
-        models = ["reduced_CNN"]
-
-        do_training = True
-        do_testing = True
-        visualize_preds = True
-        assert visualize_preds and not (do_training or do_testing)
-
-        plt.figure(figsize=(8, 6))
-
-        les_best_thresholds = {
+les_best_thresholds = {
             "BYOL": [0.490, 0.490, 0.469, 0.469],
             "Moco": [0.510, 0.531, 0.510, 0.531],
             "SimCLR": [0.429, 0.490, 0.408, 0.388],
             "SimSiam": [0.510, 0.531, 0.510, 0.490],
             "SwaV": [0.551, 0.469, 0.490, 0.571],
         }
+
+
+def main():
+    num_inds = 20
+    n_classes = 2
+    dim_inner_output = 10
+    n_heads = 8
+    batch_size = 64
+
+    # model definition
+    model_declaration = lambda n_features: ResConvSet(n_features, num_inds, n_classes, num_inds=num_inds,
+                                                      num_heads=n_heads,
+                                                      dim_inner_output=dim_inner_output)
+
+    # training
+    exp = Experiment(model_declaration, batch_size)
+    exp.run()
+
+
+class Experiment:
+    def __init__(self, model_declaration, batch_size):
+        self.train = None
+        self.model_declaration = model_declaration
+        self.batch_size = batch_size
+        self.train_gen = None
+        self.val_gen = None
+        self.test_gen = None
+
+    def run(self):
+        n_run = 4
+        base_fpr = np.linspace(0, 1, 101)
+        # models = ("BYOL", "Moco", "SimCLR", "SimSiam", "SwaV")
+        models = ["reduced_CNN"]
+
+        do_training = False
+        do_testing = False
+        visualize_preds = True
+        assert visualize_preds and not (do_training or do_testing)
+
+        plt.figure(figsize=(8, 6))
 
         for model_name in models:
             print("Training:", model_name)
@@ -49,38 +66,19 @@ class Experiment:
 
             n_features = sum(['feature' in col for col in pd.read_csv(f"features/{model_name}_val.csv").columns])
 
-            self.train_gen = DataLoaderISIC(
-                f"features/{model_name}_train.csv",
-                "GroundTruth.csv",
-                batch_size=self.batch_size,
-                input_dim=num_inds
-            )
-
-            self.val_gen = DataLoaderISIC(
-                f"features/{model_name}_val.csv",
-                "GroundTruth.csv",
-                batch_size=self.batch_size,
-                input_dim=num_inds
-            )
-
-            self.test_gen = DataLoaderISIC(
-                f"features/{model_name}_test.csv",
-                "GroundTruth.csv",
-                batch_size=self.batch_size,
-                input_dim=num_inds
-            )
+            self.train_gen, self.val_gen, self.test_gen = self.get_gens(model_name)
 
             class_weights = torch.tensor([0.02, 0.98]).cuda()
             self.criterion = nn.CrossEntropyLoss(class_weights)
 
             for run in range(n_run):
                 outname = f"{model_name}/residual_{model_name}_{run}_{num_inds}_{dim_inner_output}.pth"
-                model_declaration = ResConvSet(n_features, num_inds, n_classes, num_inds=num_inds, num_heads=n_heads,
-                                               dim_inner_output=dim_inner_output)
+                model_declaration = self.model_declaration()
 
-                train = Training(model_declaration, self.train_gen, self.val_gen, self.test_gen)
+                train = Training(model_name, model_declaration, self.train_gen, self.val_gen, self.test_gen)
 
-                all_auc, all_bacc, all_sens, all_spec, all_tpr, all_fpr = train.run(outname)
+                all_auc, all_bacc, all_sens, all_spec, all_tpr, all_fpr = train.run(outname, do_training, do_testing,
+                                                                                    visualize_preds)
 
                 if visualize_preds:
                     print(model_name)
@@ -101,10 +99,32 @@ class Experiment:
                 plt.grid()
                 plt.savefig('roc_curve_with_std.png', dpi=300, bbox_inches='tight')
 
+    def get_gens(self, model_name):
+        train_gen = DataLoaderISIC(
+            f"features/{model_name}_train.csv",
+            "GroundTruth.csv",
+            batch_size=self.batch_size,
+            input_dim=self.num_inds
+        )
+
+        val_gen = DataLoaderISIC(
+            f"features/{model_name}_val.csv",
+            "GroundTruth.csv",
+            batch_size=self.batch_size,
+            input_dim=self.num_inds
+        )
+
+        test_gen = DataLoaderISIC(
+            f"features/{model_name}_test.csv",
+            "GroundTruth.csv",
+            batch_size=self.batch_size,
+            input_dim=self.num_inds
+        )
+        return train_gen, val_gen, test_gen
+
 
 class Training:
-
-    def __init__(self, model_declaration, train_gen, val_gen, test_gen):
+    def __init__(self, model_name, model_declaration, train_gen, val_gen, test_gen):
         self.train_gen = train_gen
         self.val_gen = val_gen
         self.test_gen = test_gen
@@ -116,12 +136,13 @@ class Training:
         self.train_epochs = 150
         self.batch_size = 64
         self.patience = 15
+        self.base_fpr = np.linspace(0, 1, 101)
+        self.model_name = model_name
 
-    def run(self, outname, do_training, do_testing):
+    def run(self, outname, do_training, do_testing, visualize_preds):
         # outname = f"{model_name}/residual_{model_name}_{run}_{num_inds}.pth"
         all_auc, all_bacc, all_sens, all_spec = [], [], [], []
         all_tpr, all_fpr = [], []
-        base_fpr = np.linspace(0, 1, 101)
 
         if do_training:
             model = self.model_declaration()
@@ -154,11 +175,11 @@ class Training:
             data = pd.DataFrame({'p': [pred for pred in predicted_probs],
                                  'target': true_labels})
             # np.savetxt(f"predictions/{model_name}_{run}_{num_inds}", np.array(predicted_probs), delimiter=",")
-            data.to_csv(f"predictions/{model_name}_{run}_{num_inds}.csv", index=False)
+            data.to_csv(f"predictions/{outname}.csv", index=False)
             binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
 
             sensitivity, specificity, tpr, fpr = get_results(true_labels, binary_predictions, predicted_probs,
-                                                             base_fpr)
+                                                             self.base_fpr)
 
             all_auc.append(roc_auc_score(true_labels, predicted_probs))
             all_bacc.append(balanced_accuracy_score(true_labels, binary_predictions))
@@ -176,12 +197,12 @@ class Training:
             true_labels = data["target"]
             predicted_probs = data["p"]
 
-            best_thresh = les_best_thresholds[model_name][run]
+            best_thresh = les_best_thresholds[self.model_name][self.run]
 
             binary_predictions = (np.array(predicted_probs) > best_thresh).astype(int)
 
             sensitivity, specificity, tpr, fpr = get_results(true_labels, binary_predictions, predicted_probs,
-                                                             base_fpr)
+                                                             self.base_fpr)
 
             all_auc.append(roc_auc_score(true_labels, predicted_probs))
             all_bacc.append(balanced_accuracy_score(true_labels, binary_predictions))
@@ -272,29 +293,6 @@ class Training:
             true_labels += lbls.view(-1).cpu().numpy().tolist()
             predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
         return losses, total, correct, true_labels, predicted_probs
-
-    def get_gens(self, model_name):
-        train_gen = DataLoaderISIC(
-            f"features/{model_name}_train.csv",
-            "GroundTruth.csv",
-            batch_size=self.batch_size,
-            input_dim=self.num_inds
-        )
-
-        val_gen = DataLoaderISIC(
-            f"features/{model_name}_val.csv",
-            "GroundTruth.csv",
-            batch_size=self.batch_size,
-            input_dim=self.num_inds
-        )
-
-        test_gen = DataLoaderISIC(
-            f"features/{model_name}_test.csv",
-            "GroundTruth.csv",
-            batch_size=self.batch_size,
-            input_dim=self.num_inds
-        )
-        return train_gen, val_gen, test_gen
 
 
 def find_best_threshold(true_labels, predicted_probs):

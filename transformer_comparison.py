@@ -77,80 +77,50 @@ class DataLoaderISIC:
             start += self.batch_size
 
 
-batch_size = 32
-n_patients = 20
-model_name = "reduced_CNN"
+def main():
+    batch_size = 32
+    n_patients = 20
+    model_name = "reduced_CNN"
 
-train_gen = DataLoaderISIC(
-            f"features/{model_name}_train.csv",
-            "GroundTruth.csv",
-            batch_size=batch_size,
-            input_dim=n_patients
-        )
+    train_gen = DataLoaderISIC(
+                f"features/{model_name}_train.csv",
+                "GroundTruth.csv",
+                batch_size=batch_size,
+                input_dim=n_patients
+            )
 
-val_gen = DataLoaderISIC(
-    f"features/{model_name}_val.csv",
-    "GroundTruth.csv",
-    batch_size=batch_size,
-    input_dim=n_patients
-)
+    val_gen = DataLoaderISIC(
+        f"features/{model_name}_val.csv",
+        "GroundTruth.csv",
+        batch_size=batch_size,
+        input_dim=n_patients
+    )
 
-test_gen = DataLoaderISIC(
-    f"features/{model_name}_test.csv",
-    "GroundTruth.csv",
-    batch_size=batch_size,
-    input_dim=n_patients
-)
+    test_gen = DataLoaderISIC(
+        f"features/{model_name}_test.csv",
+        "GroundTruth.csv",
+        batch_size=batch_size,
+        input_dim=n_patients
+    )
 
-# Initialize the model, loss function, and optimizer
-model = CNNModel().cuda()
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Initialize the model, loss function, and optimizer
+    model = CNNModel().cuda()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Training loop
-num_epochs = 100
+    # Training loop
+    num_epochs = 100
 
-total_loss = 0
-y_true = []
-y_scores = []
+    total_loss = 0
+    y_true = []
+    y_scores = []
 
-for epoch in range(num_epochs):
-    for images, labels in train_gen.train_data():
-        optimizer.zero_grad()
+    for epoch in range(num_epochs):
+        for images, labels in train_gen.train_data():
+            optimizer.zero_grad()
 
-        imgs = torch.Tensor(images).cuda().unsqueeze(1)
-        lbls = torch.Tensor(labels).long().cuda().float().view(-1)
-        preds = model(imgs)
-        preds = preds.view(-1)
-
-        zero_rows_mask = torch.all(imgs == 0, dim=-1)
-        non_zero_rows_mask = ~zero_rows_mask
-        non_zero_rows_mask = non_zero_rows_mask.view(-1)
-        preds = preds[non_zero_rows_mask]
-        lbls = lbls[non_zero_rows_mask]
-
-        loss = criterion(preds, lbls.view(-1))
-
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-
-        y_true.extend(lbls.cpu().numpy())
-        y_scores.extend(torch.sigmoid(preds).detach().cpu().numpy())
-
-    auc = roc_auc_score(y_true, y_scores)
-
-    average_loss = total_loss / len(train_gen)
-    print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {average_loss:.4f}, AUC: {auc:.4f}')
-    old_mean = 0
-
-    if epoch % 1 == 0:
-        model.eval()
-        losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
-        for imgs, lbls in val_gen.train_data():
-            imgs = torch.Tensor(imgs).cuda().unsqueeze(1)
-            lbls = torch.Tensor(lbls).long().cuda().float().view(-1)
+            imgs = torch.Tensor(images).cuda().unsqueeze(1)
+            lbls = torch.Tensor(labels).long().cuda().float().view(-1)
             preds = model(imgs)
             preds = preds.view(-1)
 
@@ -162,24 +132,59 @@ for epoch in range(num_epochs):
 
             loss = criterion(preds, lbls.view(-1))
 
-            losses.append(loss.item())
-            total += lbls.view(-1).shape[0]
-            correct += ((preds > 0.5) == lbls.view(-1)).sum().item() #
+            loss.backward()
+            optimizer.step()
 
-            true_labels += lbls.view(-1).cpu().numpy().tolist()
-            # predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
-            predicted_probs += preds.cpu().detach().numpy().tolist()
+            total_loss += loss.item()
 
-        avg_loss, avg_acc = np.mean(losses), correct / total
+            y_true.extend(lbls.cpu().numpy())
+            y_scores.extend(torch.sigmoid(preds).detach().cpu().numpy())
 
-        auc = roc_auc_score(true_labels, predicted_probs)
-        balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
-        new_mean = auc
-        if new_mean >= old_mean:
-            torch.save(model.state_dict(), f"models/{model_name}/SimpleCNN_{model_name}.pth")
-            old_mean = new_mean
+        auc = roc_auc_score(y_true, y_scores)
+
+        average_loss = total_loss / len(train_gen)
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {average_loss:.4f}, AUC: {auc:.4f}')
+        old_mean = 0
 
         if epoch % 1 == 0:
-            print(
-                f"Epoch {epoch}: val loss {avg_loss:.3f} val acc {avg_acc:.3f} val AUC {auc:.3f} "
-                f"val balanced acc {balanced_acc:.3f}")
+            model.eval()
+            losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
+            for imgs, lbls in val_gen.train_data():
+                imgs = torch.Tensor(imgs).cuda().unsqueeze(1)
+                lbls = torch.Tensor(lbls).long().cuda().float().view(-1)
+                preds = model(imgs)
+                preds = preds.view(-1)
+
+                zero_rows_mask = torch.all(imgs == 0, dim=-1)
+                non_zero_rows_mask = ~zero_rows_mask
+                non_zero_rows_mask = non_zero_rows_mask.view(-1)
+                preds = preds[non_zero_rows_mask]
+                lbls = lbls[non_zero_rows_mask]
+
+                loss = criterion(preds, lbls.view(-1))
+
+                losses.append(loss.item())
+                total += lbls.view(-1).shape[0]
+                correct += ((preds > 0.5) == lbls.view(-1)).sum().item() #
+
+                true_labels += lbls.view(-1).cpu().numpy().tolist()
+                # predicted_probs += torch.softmax(preds.view(-1, 2), dim=1)[:, 1].cpu().detach().numpy().tolist()
+                predicted_probs += preds.cpu().detach().numpy().tolist()
+
+            avg_loss, avg_acc = np.mean(losses), correct / total
+
+            auc = roc_auc_score(true_labels, predicted_probs)
+            balanced_acc = balanced_accuracy_score(true_labels, (np.array(predicted_probs) > 0.5).astype(int))
+            new_mean = auc
+            if new_mean >= old_mean:
+                torch.save(model.state_dict(), f"models/{model_name}/SimpleCNN_{model_name}.pth")
+                old_mean = new_mean
+
+            if epoch % 1 == 0:
+                print(
+                    f"Epoch {epoch}: val loss {avg_loss:.3f} val acc {avg_acc:.3f} val AUC {auc:.3f} "
+                    f"val balanced acc {balanced_acc:.3f}")
+
+
+if __name__ == "__main__":
+    main()
