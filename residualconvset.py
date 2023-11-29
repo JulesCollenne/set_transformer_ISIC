@@ -122,7 +122,7 @@ def main():
                 model.load_state_dict(torch.load(f"models/{outname}"))
                 model.eval()
 
-                losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion)
+                losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion, False)
 
                 avg_loss, avg_acc = np.mean(losses), correct / total
 
@@ -257,7 +257,12 @@ def plot_average_roc(all_tpr, base_fpr, all_auc, model_name):
     #     plt.plot(all_fpr[i], all_tpr[i], alpha=0.3)
 
 
-def do_one_epoch(gen, model, criterion):
+def do_one_epoch(gen, model, criterion, is_training, optimizer=None):
+    if is_training:
+        model.train()
+    else:
+        model.eval()
+
     losses, total, correct, true_labels, predicted_probs = [], 0, 0, [], []
     for imgs, lbls in gen.train_data():
         imgs = torch.Tensor(imgs).cuda()
@@ -270,6 +275,11 @@ def do_one_epoch(gen, model, criterion):
         lbls = lbls[non_zero_rows_mask]
 
         loss = criterion(preds.view(-1, 2), lbls.view(-1))
+
+        if is_training:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         losses.append(loss.item())
         total += lbls.view(-1).shape[0]
@@ -290,7 +300,8 @@ def train(model, train_gen, val_gen, criterion, outname, patience, print_freq=1,
 
     for epoch in range(args.train_epochs):
         model.train()
-        losses, total, correct, true_labels, predicted_probs = do_one_epoch(train_gen, model, criterion)
+        losses, total, correct, true_labels, predicted_probs = do_one_epoch(train_gen, model, criterion, True,
+                                                                            optimizer)
         avg_loss, avg_acc = np.mean(losses), correct / total
 
         auc = roc_auc_score(true_labels, predicted_probs)
@@ -307,7 +318,8 @@ def train(model, train_gen, val_gen, criterion, outname, patience, print_freq=1,
 
         if epoch % val_freq == 0:
             model.eval()
-            losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion)
+            losses, total, correct, true_labels, predicted_probs = do_one_epoch(val_gen, model, criterion, False,
+                                                                                optimizer)
             avg_loss, avg_acc = np.mean(losses), correct / total
 
             auc = roc_auc_score(true_labels, predicted_probs)
