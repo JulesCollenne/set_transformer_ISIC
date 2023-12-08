@@ -36,6 +36,91 @@ def standardize(x):
     return (z - mean) / std
 
 
+class DataLoaderISICBodyPartEncoding:
+    """
+    Je vais ajouter l'emplacement sur le corps comme encoding !
+    """
+    def __init__(self, df_name, gt_name, batch_size, input_dim=20):
+        self.batch_size = batch_size
+        self.input_dim = input_dim
+
+        self.gt = pd.read_csv(gt_name)
+        self.train_features = pd.read_csv(df_name)
+
+        matching_patient_ids = self.gt[self.gt["image_name"].isin(self.train_features["image_name"])]["patient_id"]
+        self.patients = matching_patient_ids.unique()
+        self.n_features = sum(['feature' in col for col in self.train_features.columns])
+
+    def train_data(self):
+        start = 0
+        end = self.batch_size
+        while end < len(self.patients):
+            patients_names = self.patients[start:end]
+            patients_imgs = [self.gt[self.gt["patient_id"] == pid]["image_name"].values for pid in patients_names]
+            current_features = []
+            current_labels = []
+            for pnum, current_patient_imgs in enumerate(patients_imgs):
+                random.shuffle(current_patient_imgs)
+                current_patient_features = []
+                current_patient_labels = []
+                for i in range(self.input_dim):
+                    if i < len(current_patient_imgs):  # If a patient has more images than needed
+                        # current_patient_features.append(
+                        #     self.train_features[self.train_features["image_name"] == current_patient_imgs[i]].filter(like="feature").values[0])
+                        image_features = self.train_features[self.train_features["image_name"] == current_patient_imgs[i]].filter(like="feature").values[0]
+                        location_encoding = self.train_features[self.train_features["image_name"] == current_patient_imgs[i]]["anatom_site_general_challenge"]
+                        combined_features = np.concatenate((image_features, location_encoding), axis=0)
+                        current_patient_features.append(combined_features)
+                        current_patient_labels.append(self.gt[self.gt["image_name"] == current_patient_imgs[i]]["target"].values[0])
+                        # current_patient_labels.append(np.eye(2)[self.gt[self.gt["image_name"] == images[i]]["target"].values[0]])
+                    else:
+                        current_patient_features.append(np.zeros(self.n_features))
+                        current_patient_labels.append(0)  # TODO not sre whether I should do something else
+                        # current_patient_labels.append([1, 0])
+                current_features.append(current_patient_features)
+                current_labels.append(current_patient_labels)
+            current_features = np.asarray(current_features)
+            current_labels = np.asarray(current_labels)
+            yield current_features, current_labels
+            end += self.batch_size
+            start += self.batch_size
+
+    def test_data(self):
+        start = 0
+        end = self.batch_size
+        while end < len(self.patients):
+            patients_names = self.patients[start:end]
+            patients_imgs = [self.gt[self.gt["patient_id"] == pid]["image_name"].values for pid in patients_names]
+            current_features = []
+            current_labels = []
+            for pnum, current_patient_imgs in enumerate(patients_imgs):
+                random.shuffle(current_patient_imgs)
+                current_patient_features = []
+                current_patient_labels = []
+
+                for i in range(len(current_patient_imgs) // self.input_dim):
+                    for j in range(self.input_dim):
+                        if i*self.input_dim+j < len(current_patient_imgs):
+                            current_patient_features.append(
+                                self.train_features[
+                                    self.train_features["image_name"] == current_patient_imgs[i]].filter(
+                                    like="feature").values[0])
+                            current_patient_labels.append(
+                                self.gt[self.gt["image_name"] == current_patient_imgs[i]]["target"].values[0])
+                        else:
+                            current_patient_features.append(np.zeros(self.n_features))
+                            current_patient_labels.append(0)
+
+                    current_features.append(current_patient_features)
+                    current_labels.append(current_patient_labels)
+
+            current_features = np.asarray(current_features)
+            current_labels = np.asarray(current_labels)
+            yield current_features, current_labels
+            end += self.batch_size
+            start += self.batch_size
+
+
 class DataLoaderISIC:
     def __init__(self, df_name, gt_name, batch_size, input_dim=20):
         self.batch_size = batch_size
